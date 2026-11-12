@@ -1,4 +1,3 @@
-
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -8,591 +7,343 @@
 #include <algorithm>
 #include <cctype>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 using namespace std;
 
-// ==========================================
-// ESTRUTURAS DE DADOS
-// ==========================================
+struct Material { string codigo, descricao, unidade; double saldo; }; // unidade: UN ou M
+typedef void (*Acao)();
 
-struct Material {
-    string codigo;
-    string descricao;
-    string unidade; // UN ou M
-    double saldo;
-};
-
-struct ItemSaida {
-    string codigo;
-    double quantidade;
-};
+const string ERRO_PV = "O campo nao pode conter ponto e virgula.";
 
 // ==========================================
-// DECLARAÇÃO DE FUNÇÕES (PROTÓTIPOS)
+// UTILITARIOS
 // ==========================================
 
-// Funções Utilitárias e de Validação
-void pausar();
-string paraMinusculo(string str);
-bool contemPontoEVirgula(const string& str);
-bool validarData(const string& data);
-bool validarHora(const string& hora);
-string lerEntradaSemSemicolon(const string& mensagem);
-
-// Manipulação de Arquivos
-vector<Material> carregarMateriais();
-void salvarMateriais(const vector<Material>& materiais);
-void registrarMovimentacao(const string& linhaLog);
-int buscarMaterialPorCodigo(const vector<Material>& materiais, const string& codigo);
-
-// Módulo 1: Almoxarifado
-void menuAlmoxarifado();
-void registrarEntrada();
-void registrarSaidaObra();
-void ajusteEstoque();
-void cadastrarMaterial();
-
-// Módulo 2: Acompanhamento de Obras
-void menuAcompanhamentoObras();
-void materiaisEnviadosPorObra();
-
-// Módulo 3: Gestão do Estoque
-void menuGestaoEstoque();
-void saldoTodosMateriais();
-void pesquisarMaterial();
-
-// ==========================================
-// FUNÇÃO PRINCIPAL (MAIN)
-// ==========================================
-
-int main() {
-    int opcao = -1;
-
-    // Loop do Menu Principal (Fluxograma 0)
-    while (opcao != 0) {
-        cout << "\n==========================================\n";
-        cout << "         AIR SOLUTION MENU PRINCIPAL      \n";
-        cout << "==========================================\n";
-        cout << "1 - Almoxarifado\n";
-        cout << "2 - Acompanhamento de obras\n";
-        cout << "3 - Gestao do estoque\n";
-        cout << "0 - Sair\n";
-        cout << "Escolha uma opcao: ";
-        
-        if (!(cin >> opcao)) {
-            cin.clear();
-            cin.ignore(10000, '\n');
-            cout << "Opcao invalida. Digite um numero do menu.\n";
-            continue;
-        }
-
-        switch (opcao) {
-            case 1:
-                menuAlmoxarifado();
-                break;
-            case 2:
-                menuAcompanhamentoObras();
-                break;
-            case 3:
-                menuGestaoEstoque();
-                break;
-            case 0:
-                cout << "\nAir Solution - Menu principal\n";
-                cout << "Sistema encerrado. Ate logo!\n";
-                break;
-            default:
-                cout << "Opcao invalida. Digite um numero do menu.\n";
-                break;
-        }
-    }
-
-    return 0;
+// Limpa a tela (e o historico de rolagem) do terminal
+void limparTela() {
+#ifdef _WIN32
+    // Ativa o suporte a sequencias ANSI no console do Windows
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD modo = 0;
+    if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &modo))
+        SetConsoleMode(h, modo | 0x0004); // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#endif
+    // 2J = limpa a tela | 3J = limpa o historico de rolagem | H = cursor no topo
+    cout << "\033[2J\033[3J\033[H" << flush;
 }
 
-// ==========================================
-// FUNÇÕES UTILITÁRIAS E VALIDAÇÃO
-// ==========================================
-
-void pausar() {
+// descartarResto = true  -> depois de "cin >> x" (sobra um ENTER no buffer)
+// descartarResto = false -> depois de "getline" (buffer ja esta limpo)
+void pausar(bool descartarResto = true) {
     cout << "\nPressione ENTER para continuar...";
-    cin.ignore(10000, '\n');
+    if (descartarResto) cin.ignore(10000, '\n');
     cin.get();
 }
 
-string paraMinusculo(string str) {
-    transform(str.begin(), str.end(), str.begin(), ::tolower);
-    return str;
+void tela(const string& titulo) {
+    limparTela();
+    cout << "\n--- AIR SOLUTION " << titulo << " ---\n";
 }
 
-bool contemPontoEVirgula(const string& str) {
-    return str.find(';') != string::npos;
+string caixa(string s, int (*f)(int)) {
+    transform(s.begin(), s.end(), s.begin(), [f](unsigned char c) { return static_cast<char>(f(c)); });
+    return s;
 }
 
-bool validarData(const string& data) {
-    if (data.length() != 10) return false;
-    if (data[2] != '/' || data[5] != '/') return false;
-    for (int i = 0; i < 10; ++i) {
-        if (i == 2 || i == 5) continue;
-        if (!isdigit(data[i])) return false;
-    }
+// Confere o texto contra um molde: 'D' = digito, qualquer outro caractere deve ser igual
+bool formato(const string& s, const string& molde) {
+    if (s.size() != molde.size()) return false;
+    for (size_t i = 0; i < s.size(); ++i)
+        if (molde[i] == 'D' ? !isdigit(static_cast<unsigned char>(s[i])) : s[i] != molde[i]) return false;
     return true;
 }
 
-bool validarHora(const string& hora) {
-    if (hora.length() != 5) return false;
-    if (hora[2] != ':') return false;
-    if (!isdigit(hora[0]) || !isdigit(hora[1]) || !isdigit(hora[3]) || !isdigit(hora[4])) return false;
-    int h = stoi(hora.substr(0, 2));
-    int m = stoi(hora.substr(3, 2));
-    return (h >= 0 && h <= 23 && m >= 0 && m <= 59);
-}
+bool semPontoEVirgula(const string& s) { return s.find(';') == string::npos; }
+bool dataOk(const string& d) { return formato(d, "DD/DD/DDDD"); }
+bool horaOk(const string& h) { return formato(h, "DD:DD") && stoi(h.substr(0, 2)) <= 23 && stoi(h.substr(3, 2)) <= 59; }
+bool unidadeOk(const string& s) { string u = caixa(s, ::toupper); return u == "UN" || u == "M"; }
 
-string lerEntradaSemSemicolon(const string& mensagem) {
-    string entrada;
+// Le uma palavra ate ser valida
+string ler(const string& msg, bool (*ok)(const string&), const string& erro) {
+    string s;
     while (true) {
-        cout << mensagem;
-        cin >> entrada;
-        if (contemPontoEVirgula(entrada)) {
-            cout << "O campo nao pode conter ponto e virgula.\n"; // RNF de sanitização para CSV
-        } else {
-            return entrada;
-        }
+        cout << msg;
+        cin >> s;
+        if (ok(s)) return s;
+        cout << erro << "\n";
     }
 }
 
+// Le um numero (> 0, ou >= 0 se aceitaZero) ate ser valido
+double lerNumero(const string& msg, const string& erro, bool aceitaZero) {
+    double v;
+    while (true) {
+        cout << msg;
+        if (cin >> v && (aceitaZero ? v >= 0 : v > 0)) return v;
+        cin.clear();
+        cin.ignore(10000, '\n');
+        cout << erro << "\n";
+    }
+}
+
+string lerDataHora() {
+    string d = ler("Data (DD/MM/AAAA): ", dataOk, "Data invalida. Use DD/MM/AAAA");
+    string h = ler("Hora (HH:MM): ", horaOk, "Hora invalida. Use HH:MM.");
+    return d + " " + h;
+}
+
+bool confirmar(const string& msg) {
+    char c;
+    cout << msg << " (S/N): ";
+    cin >> c;
+    return toupper(c) == 'S';
+}
+
 // ==========================================
-// MANIPULAÇÃO DE ARQUIVOS (CSV)
+// ARQUIVOS CSV
 // ==========================================
 
-// Leitura de materiais.csv (codigo;descricao;unidade;saldo)
+// materiais.csv: codigo;descricao;unidade;saldo
 vector<Material> carregarMateriais() {
-    vector<Material> materiais;
-    ifstream arquivo("materiais.csv");
-    if (!arquivo.is_open()) return materiais;
-
+    vector<Material> v;
+    ifstream f("materiais.csv");
     string linha;
-    while (getline(arquivo, linha)) {
-        if (linha.empty()) continue;
+    while (getline(f, linha)) {
         stringstream ss(linha);
-        string cod, desc, uni, salStr;
-
-        if (getline(ss, cod, ';') && getline(ss, desc, ';') && getline(ss, uni, ';') && getline(ss, salStr, ';')) {
-            Material m;
-            m.codigo = cod;
-            m.descricao = desc;
-            m.unidade = uni;
-            m.saldo = stod(salStr);
-            materiais.push_back(m);
+        Material m;
+        string saldo;
+        if (getline(ss, m.codigo, ';') && getline(ss, m.descricao, ';') &&
+            getline(ss, m.unidade, ';') && getline(ss, saldo, ';')) {
+            m.saldo = stod(saldo);
+            v.push_back(m);
         }
     }
-    arquivo.close();
-    return materiais;
+    return v;
 }
 
-// Gravação/Reescrita integral de materiais.csv
-void salvarMateriais(const vector<Material>& materiais) {
-    ofstream arquivo("materiais.csv", ios::trunc);
-    for (const auto& m : materiais) {
-        arquivo << m.codigo << ";" << m.descricao << ";" << m.unidade << ";" << fixed << setprecision(2) << m.saldo << "\n";
-    }
-    arquivo.close();
+void salvarMateriais(const vector<Material>& v) {
+    ofstream f("materiais.csv", ios::trunc);
+    for (const auto& m : v)
+        f << m.codigo << ";" << m.descricao << ";" << m.unidade << ";" << fixed << setprecision(2) << m.saldo << "\n";
 }
 
-// Adiciona um registro ao final de movimentacoes.csv
-void registrarMovimentacao(const string& linhaLog) {
-    ofstream arquivo("movimentacoes.csv", ios::app);
-    if (arquivo.is_open()) {
-        arquivo << linhaLog << "\n";
-        arquivo.close();
-    }
+// movimentacoes.csv: data hora;tipo;codigo;quantidade;saldo anterior;saldo novo;observacao
+void registrarMovimentacao(const string& dataHora, const string& tipo, const string& cod,
+                           double qtd, double anterior, double novo, const string& obs) {
+    ofstream f("movimentacoes.csv", ios::app);
+    f << dataHora << ";" << tipo << ";" << cod << ";" << qtd << ";" << anterior << ";" << novo << ";" << obs << "\n";
 }
 
-int buscarMaterialPorCodigo(const vector<Material>& materiais, const string& codigo) {
-    for (size_t i = 0; i < materiais.size(); ++i) {
-        if (materiais[i].codigo == codigo) {
-            return static_cast<int>(i);
-        }
-    }
+int buscarMaterialPorCodigo(const vector<Material>& v, const string& cod) {
+    for (size_t i = 0; i < v.size(); ++i)
+        if (v[i].codigo == cod) return static_cast<int>(i);
     return -1;
 }
 
-// ==========================================
-// MÓDULO 1: ALMOXARIFADO
-// ==========================================
-
-void menuAlmoxarifado() {
-    int opcao = -1;
-    while (opcao != 0) {
-        cout << "\n------------------------------------------\n";
-        cout << "       AIR SOLUTION ALMOXARIFADO          \n";
-        cout << "------------------------------------------\n";
-        cout << "1 - Registrar entrada\n";
-        cout << "2 - Registrar saida para obra\n";
-        cout << "3 - Ajuste de estoque\n";
-        cout << "4 - Cadastrar material\n";
-        cout << "0 - Voltar ao menu principal\n";
-        cout << "Escolha uma opcao: ";
-
-        if (!(cin >> opcao)) {
-            cin.clear();
-            cin.ignore(10000, '\n');
-            cout << "Opcao invalida. Digite um numero do menu.\n";
-            continue;
-        }
-
-        switch (opcao) {
-            case 1: registrarEntrada(); break; // RF02
-            case 2: registrarSaidaObra(); break; // RF03
-            case 3: ajusteEstoque(); break; // RF06/RF09
-            case 4: cadastrarMaterial(); break; // RF01
-            case 0: break;
-            default: cout << "Opcao invalida. Digite um numero do menu.\n"; break;
-        }
+// Pede o codigo ate achar um material. Retorna o indice, ou -1 se o usuario digitar 0
+int escolherMaterial(const vector<Material>& v) {
+    while (true) {
+        string cod;
+        cout << "Codigo do material (0 = voltar): ";
+        cin >> cod;
+        if (cod == "0") return -1;
+        int i = buscarMaterialPorCodigo(v, cod);
+        if (i >= 0) return i;
+        cout << "Material nao encontrado.\n";
     }
 }
 
-// 1.1 Registrar Entrada
-void registrarEntrada() {
-    vector<Material> materiais = carregarMateriais();
-    cout << "\n--- AIR SOLUTION ALMOXARIFADO REGISTRAR ENTRADA ---\n";
+void tabelaMateriais(const vector<Material>& v) {
+    cout << left << setw(10) << "CODIGO" << setw(32) << "DESCRICAO" << setw(6) << "UN" << "SALDO\n"
+         << string(57, '-') << "\n";
+    for (const auto& m : v)
+        cout << left << setw(10) << m.codigo << setw(32) << m.descricao << setw(6) << m.unidade << m.saldo << "\n";
+}
 
-    string codigo;
-    int idx = -1;
+// ==========================================
+// MENU GENERICO (um unico codigo para todos os menus)
+// ==========================================
 
-    while (true) {
-        cout << "Codigo do material (0 = voltar): ";
-        cin >> codigo;
-        if (codigo == "0") return;
+void menu(const string& titulo, char borda, const vector<pair<string, Acao>>& itens, const string& saida) {
+    int op = -1;
+    string aviso;
+    while (op != 0) {
+        limparTela();
+        cout << "\n" << string(42, borda) << "\n" << titulo << "\n" << string(42, borda) << "\n";
+        for (size_t i = 0; i < itens.size(); ++i) cout << i + 1 << " - " << itens[i].first << "\n";
+        cout << "0 - " << saida << "\n";
+        if (!aviso.empty()) cout << "\n" << aviso << "\n";
+        aviso.clear();
+        cout << "Escolha uma opcao: ";
 
-        idx = buscarMaterialPorCodigo(materiais, codigo);
-        if (idx == -1) {
-            cout << "Material nao encontrado.\n"; // Tela 1.1-A
-        } else {
-            break;
-        }
-    }
-
-    cout << "Descricao: " << materiais[idx].descricao << "\n";
-    cout << "Unidade: " << materiais[idx].unidade << "\n";
-    cout << "Saldo atual: " << materiais[idx].saldo << "\n";
-
-    double qtd = 0;
-    while (true) {
-        cout << "Quantidade recebida: ";
-        if (!(cin >> qtd) || qtd <= 0) {
+        if (!(cin >> op)) { // o cin zera a variavel ao falhar; -1 evita sair do menu
             cin.clear();
             cin.ignore(10000, '\n');
-            cout << "Quantidade invalida.\n";
-        } else {
-            break;
+            op = -1;
         }
+        if (op > 0 && op <= static_cast<int>(itens.size())) itens[op - 1].second();
+        else if (op != 0) aviso = "Opcao invalida. Digite um numero do menu.";
     }
+}
 
-    string data, hora;
-    while (true) {
-        cout << "Data (DD/MM/AAAA): ";
-        cin >> data;
-        if (!validarData(data)) {
-            cout << "Data invalida. Use DD/MM/AAAA\n";
-        } else {
-            break;
-        }
-    }
+// ==========================================
+// MODULO 1: ALMOXARIFADO
+// ==========================================
 
-    while (true) {
-        cout << "Hora (HH:MM): ";
-        cin >> hora;
-        if (!validarHora(hora)) {
-            cout << "Hora invalida. Use HH:MM.\n";
-        } else {
-            break;
-        }
-    }
+void registrarEntrada() {
+    vector<Material> v = carregarMateriais();
+    tela("ALMOXARIFADO REGISTRAR ENTRADA");
+    int i = escolherMaterial(v);
+    if (i < 0) return;
+    Material& m = v[i];
 
-    // Tela 1.1-B Resumo e confirmação
-    cout << "\nRESUMO DA ENTRADA\n";
-    cout << "Material: " << materiais[idx].codigo << " - " << materiais[idx].descricao << "\n";
-    cout << "Entrada: " << qtd << " " << materiais[idx].unidade << "\n";
-    cout << "Saldo: " << materiais[idx].saldo << " -> " << (materiais[idx].saldo + qtd) << "\n";
-    cout << "Data: " << data << " " << hora << "\n";
+    cout << "Descricao: " << m.descricao << "\nUnidade: " << m.unidade << "\nSaldo atual: " << m.saldo << "\n";
+    double qtd = lerNumero("Quantidade recebida: ", "Quantidade invalida.", false);
+    string dh = lerDataHora();
 
-    char conf;
-    cout << "Confirmar entrada? (S/N): ";
-    cin >> conf;
+    cout << "\nRESUMO DA ENTRADA\nMaterial: " << m.codigo << " - " << m.descricao
+         << "\nEntrada: " << qtd << " " << m.unidade
+         << "\nSaldo: " << m.saldo << " -> " << m.saldo + qtd << "\nData: " << dh << "\n";
 
-    if (toupper(conf) == 'S') {
-        double saldoAnterior = materiais[idx].saldo;
-        materiais[idx].saldo += qtd;
-        salvarMateriais(materiais);
-
-        // Registro em movimentacoes.csv
-        stringstream ss;
-        ss << data << " " << hora << ";ENTRADA;" << materiais[idx].codigo << ";" 
-           << qtd << ";" << saldoAnterior << ";" << materiais[idx].saldo << ";Entrada de estoque";
-        registrarMovimentacao(ss.str());
-
-        cout << "\nEntrada registrada. Novo saldo: " << materiais[idx].saldo << " " << materiais[idx].unidade << "\n";
+    if (confirmar("Confirmar entrada?")) {
+        double anterior = m.saldo;
+        m.saldo += qtd;
+        salvarMateriais(v);
+        registrarMovimentacao(dh, "ENTRADA", m.codigo, qtd, anterior, m.saldo, "Entrada de estoque");
+        cout << "\nEntrada registrada. Novo saldo: " << m.saldo << " " << m.unidade << "\n";
     } else {
         cout << "Entrada cancelada.\n";
     }
     pausar();
 }
 
-// 1.2 Registrar Saída para Obra
 void registrarSaidaObra() {
-    vector<Material> materiais = carregarMateriais();
-    cout << "\n--- AIR SOLUTION ALMOXARIFADO SAIDA PARA OBRA ---\n";
-
-    string obra = lerEntradaSemSemicolon("Codigo da obra ou manutencao (ex.: OP2035; 0 = voltar): ");
+    vector<Material> v = carregarMateriais();
+    tela("ALMOXARIFADO SAIDA PARA OBRA");
+    string obra = ler("Codigo da obra ou manutencao (ex.: OP2035; 0 = voltar): ", semPontoEVirgula, ERRO_PV);
     if (obra == "0") return;
+    string dh = lerDataHora();
 
-    string data, hora;
-    while (true) {
-        cout << "Data (DD/MM/AAAA): ";
-        cin >> data;
-        if (!validarData(data)) cout << "Data invalida. Use DD/MM/AAAA\n";
-        else break;
-    }
-
-    while (true) {
-        cout << "Hora (HH:MM): ";
-        cin >> hora;
-        if (!validarHora(hora)) cout << "Hora invalida. Use HH:MM.\n";
-        else break;
-    }
-
-    vector<ItemSaida> itensSaida;
-    char continuar = 'S';
-
-    // Loop para inclusão de múltiplos materiais (Fluxograma 1.2)
-    while (toupper(continuar) == 'S') {
-        string codMat;
+    vector<pair<int, double>> itens; // (indice do material, quantidade)
+    char mais = 'S';
+    while (toupper(mais) == 'S') {
+        string cod;
         cout << "\nCodigo do material (0 = cancelar a saida): ";
-        cin >> codMat;
-
-        if (codMat == "0") {
+        cin >> cod;
+        if (cod == "0") {
             cout << "Saida cancelada. Nenhum item foi gravado.\n";
             pausar();
             return;
         }
+        int i = buscarMaterialPorCodigo(v, cod);
+        if (i < 0) { cout << "Material nao encontrado.\n"; continue; }
 
-        int idx = buscarMaterialPorCodigo(materiais, codMat);
-        if (idx == -1) {
-            cout << "Material nao encontrado.\n";
-            continue;
-        }
+        // Desconta o que ja foi incluido nesta saida
+        double ja = 0;
+        for (const auto& it : itens) if (it.first == i) ja += it.second;
+        double disponivel = v[i].saldo - ja;
 
-        // Soma itens já incluídos na sessão para validação de estoque acumulado
-        double jaIncluido = 0;
-        for (const auto& item : itensSaida) {
-            if (item.codigo == codMat) jaIncluido += item.quantidade;
-        }
-
-        double disponivel = materiais[idx].saldo - jaIncluido;
-        if (disponivel <= 0) {
-            cout << codMat << " " << materiais[idx].descricao << " Unidade: " << materiais[idx].unidade << " | Saldo: " << materiais[idx].saldo << "\n";
-            cout << "Material sem saldo disponivel. Item nao incluido.\n";
-            continue;
-        }
-
-        cout << codMat << " " << materiais[idx].descricao << " Unidade: " << materiais[idx].unidade << " | Saldo: " << materiais[idx].saldo;
-        if (jaIncluido > 0) cout << " | Ja incluido: " << jaIncluido;
+        cout << cod << " " << v[i].descricao << " Unidade: " << v[i].unidade << " | Saldo: " << v[i].saldo;
+        if (ja > 0) cout << " | Ja incluido: " << ja;
         cout << "\n";
+        if (disponivel <= 0) { cout << "Material sem saldo disponivel. Item nao incluido.\n"; continue; }
 
-        double qtd = 0;
-        while (true) {
-            cout << "Quantidade: ";
-            if (!(cin >> qtd) || qtd <= 0) {
-                cin.clear();
-                cin.ignore(10000, '\n');
-                cout << "Quantidade deve ser maior que zero.\n";
-            } else if (qtd > disponivel) {
-                cout << "Saldo insuficiente. Disponivel: " << disponivel << "\n"; // Trata saldo insuficiente
-            } else {
-                break;
-            }
-        }
+        double qtd;
+        while ((qtd = lerNumero("Quantidade: ", "Quantidade deve ser maior que zero.", false)) > disponivel)
+            cout << "Saldo insuficiente. Disponivel: " << disponivel << "\n";
+        itens.push_back({i, qtd});
 
-        ItemSaida item;
-        item.codigo = codMat;
-        item.quantidade = qtd;
-        itensSaida.push_back(item);
-
-        cout << "Item incluido.\n";
-        cout << "Incluir mais materiais? (S/N): ";
-        cin >> continuar;
+        cout << "Item incluido.\nIncluir mais materiais? (S/N): ";
+        cin >> mais;
     }
 
-    if (itensSaida.empty()) return;
+    cout << "\n" << string(42, '=') << "\nRESUMO DA SAIDA OBRA " << obra << "\nData: " << dh << "\nCOD\tDESCRICAO\tQTD\tUN\n";
+    for (const auto& it : itens)
+        cout << v[it.first].codigo << "\t" << v[it.first].descricao << "\t" << it.second << "\t" << v[it.first].unidade << "\n";
 
-    // Resumo final de Saída
-    cout << "\n==========================================\n";
-    cout << "RESUMO DA SAIDA OBRA " << obra << "\n";
-    cout << "Data: " << data << " " << hora << "\n";
-    cout << "COD\tDESCRICAO\tQTD\tUN\n";
-    for (const auto& item : itensSaida) {
-        int idx = buscarMaterialPorCodigo(materiais, item.codigo);
-        cout << item.codigo << "\t" << materiais[idx].descricao << "\t" << item.quantidade << "\t" << materiais[idx].unidade << "\n";
-    }
-
-    char conf;
-    cout << "\nConfirmar saida? (S/N): ";
-    cin >> conf;
-
-    if (toupper(conf) == 'S') {
-        // Atualiza estoque e registra no arquivo CSV por item
-        for (const auto& item : itensSaida) {
-            int idx = buscarMaterialPorCodigo(materiais, item.codigo);
-            double saldoAnt = materiais[idx].saldo;
-            materiais[idx].saldo -= item.quantidade;
-
-            stringstream ss;
-            ss << data << " " << hora << ";SAIDA;" << item.codigo << ";" 
-               << item.quantidade << ";" << saldoAnt << ";" << materiais[idx].saldo << ";" << obra;
-            registrarMovimentacao(ss.str());
+    if (confirmar("\nConfirmar saida?")) {
+        for (const auto& it : itens) {
+            Material& m = v[it.first];
+            double anterior = m.saldo;
+            m.saldo -= it.second;
+            registrarMovimentacao(dh, "SAIDA", m.codigo, it.second, anterior, m.saldo, obra);
         }
-
-        salvarMateriais(materiais);
-        cout << "Saida registrada para a obra " << obra << " (" << itensSaida.size() << " itens).\n";
+        salvarMateriais(v);
+        cout << "Saida registrada para a obra " << obra << " (" << itens.size() << " itens).\n";
     } else {
         cout << "Saida cancelada.\n";
     }
     pausar();
 }
 
-// 1.3 Ajuste de Estoque
 void ajusteEstoque() {
-    vector<Material> materiais = carregarMateriais();
-    cout << "\n--- AIR SOLUTION ALMOXARIFADO AJUSTE DE ESTOQUE ---\n";
+    vector<Material> v = carregarMateriais();
+    tela("ALMOXARIFADO AJUSTE DE ESTOQUE");
+    int i = escolherMaterial(v);
+    if (i < 0) return;
+    Material& m = v[i];
 
-    string codigo;
-    int idx = -1;
-
-    while (true) {
-        cout << "Codigo do material (0 = voltar): ";
-        cin >> codigo;
-        if (codigo == "0") return;
-
-        idx = buscarMaterialPorCodigo(materiais, codigo);
-        if (idx == -1) {
-            cout << "Material nao encontrado.\n";
-        } else {
-            break;
-        }
+    cout << "Descricao: " << m.descricao << " | Unidade: " << m.unidade << "\nSaldo no sistema: " << m.saldo << "\n";
+    double novo = lerNumero("Nova quantidade total (valor contado): ", "Quantidade invalida.", true);
+    if (novo == m.saldo) {
+        cout << "Saldo ja confere. Nenhum ajuste necessario.\n";
+        pausar();
+        return;
     }
 
-    cout << "Descricao: " << materiais[idx].descricao << " | Unidade: " << materiais[idx].unidade << "\n";
-    cout << "Saldo no sistema: " << materiais[idx].saldo << "\n";
-
-    double novoTotal = 0;
-    while (true) {
-        cout << "Nova quantidade total (valor contado): ";
-        if (!(cin >> novoTotal) || novoTotal < 0) {
-            cin.clear();
-            cin.ignore(10000, '\n');
-            cout << "Quantidade invalida.\n";
-        } else if (novoTotal == materiais[idx].saldo) {
-            cout << "Saldo ja confere. Nenhum ajuste necessario.\n";
-            pausar();
-            return;
-        } else {
-            break;
-        }
-    }
-
-    int motivoOp = 0;
-    string motivoStr, justificativa = "";
-    string obraOrigem = "";
-
+    int motivo;
     while (true) {
         cout << "Motivo do ajuste:\n1 - Contagem fisica\n2 - Sobra de obra\nEscolha: ";
-        if (!(cin >> motivoOp) || (motivoOp != 1 && motivoOp != 2)) {
-            cin.clear();
-            cin.ignore(10000, '\n');
-            cout << "Opcao invalida.\n";
-        } else {
-            break;
-        }
+        if (cin >> motivo && (motivo == 1 || motivo == 2)) break;
+        cin.clear();
+        cin.ignore(10000, '\n');
+        cout << "Opcao invalida.\n";
     }
 
-    if (motivoOp == 1) {
-        motivoStr = "Contagem fisica";
-        cin.ignore(10000, '\n');
-        cout << "Justificativa (opcional): ";
-        getline(cin, justificativa);
-        if (contemPontoEVirgula(justificativa)) {
-            replace(justificativa.begin(), justificativa.end(), ';', ',');
-        }
-    } else {
-        motivoStr = "Sobra de obra";
-        if (novoTotal <= materiais[idx].saldo) {
+    string motivoStr = (motivo == 1) ? "Contagem fisica" : "Sobra de obra", obra, just;
+    if (motivo == 2) {
+        if (novo <= m.saldo) {
             cout << "Para sobra de obra, o novo total deve ser maior que o saldo atual.\n";
             pausar();
             return;
         }
-        obraOrigem = lerEntradaSemSemicolon("Codigo da obra de origem (ex.: OP2035): ");
-        cin.ignore(10000, '\n');
-        cout << "Justificativa (opcional): ";
-        getline(cin, justificativa);
-        if (justificativa.empty()) {
-            justificativa = "Retorno da " + obraOrigem;
-        }
+        obra = ler("Codigo da obra de origem (ex.: OP2035): ", semPontoEVirgula, ERRO_PV);
     }
+    cin.ignore(10000, '\n');
+    cout << "Justificativa (opcional): ";
+    getline(cin, just);
+    replace(just.begin(), just.end(), ';', ','); // ';' e o separador do CSV
+    if (motivo == 2 && just.empty()) just = "Retorno da " + obra;
 
-    string data, hora;
-    while (true) {
-        cout << "Data (DD/MM/AAAA): ";
-        cin >> data;
-        if (!validarData(data)) cout << "Data invalida. Use DD/MM/AAAA\n";
-        else break;
-    }
+    string dh = lerDataHora();
+    double dif = novo - m.saldo;
 
-    while (true) {
-        cout << "Hora (HH:MM): ";
-        cin >> hora;
-        if (!validarHora(hora)) cout << "Hora invalida. Use HH:MM.\n";
-        else break;
-    }
+    cout << "\nRESUMO DO AJUSTE\nMotivo: " << motivoStr << "\nSaldo anterior: " << m.saldo << "\nNovo saldo: " << novo
+         << "\nDiferenca: " << (dif > 0 ? "+" : "") << dif << "\nData: " << dh << "\n";
 
-    double diferenca = novoTotal - materiais[idx].saldo;
-
-    // Resumo de ajuste
-    cout << "\nRESUMO DO AJUSTE\n";
-    cout << "Motivo: " << motivoStr << "\n";
-    cout << "Saldo anterior: " << materiais[idx].saldo << "\n";
-    cout << "Novo saldo: " << novoTotal << "\n";
-    cout << "Diferenca: " << (diferenca > 0 ? "+" : "") << diferenca << "\n";
-    cout << "Data: " << data << " " << hora << "\n";
-
-    char conf;
-    cout << "Confirmar ajuste? (S/N): ";
-    cin >> conf;
-
-    if (toupper(conf) == 'S') {
-        double saldoAnt = materiais[idx].saldo;
-        materiais[idx].saldo = novoTotal;
-        salvarMateriais(materiais);
-
-        stringstream ss;
-        ss << data << " " << hora << ";AJUSTE;" << materiais[idx].codigo << ";" 
-           << diferenca << ";" << saldoAnt << ";" << materiais[idx].saldo << ";" << motivoStr << " - " << justificativa;
-        registrarMovimentacao(ss.str());
-
-        cout << "\nAjuste registrado. Novo saldo: " << materiais[idx].saldo << " " << materiais[idx].unidade << "\n";
+    if (confirmar("Confirmar ajuste?")) {
+        double anterior = m.saldo;
+        m.saldo = novo;
+        salvarMateriais(v);
+        registrarMovimentacao(dh, "AJUSTE", m.codigo, dif, anterior, novo, motivoStr + " - " + just);
+        cout << "\nAjuste registrado. Novo saldo: " << m.saldo << " " << m.unidade << "\n";
     } else {
         cout << "Ajuste cancelado.\n";
     }
     pausar();
 }
 
-// 1.4 Cadastrar Material
 void cadastrarMaterial() {
-    vector<Material> materiais = carregarMateriais();
-    cout << "\n--- AIR SOLUTION ALMOXARIFADO CADASTRAR MATERIAL ---\n";
-
-    string codigo = lerEntradaSemSemicolon("Codigo do material (0 = voltar): ");
-    if (codigo == "0") return;
-
-    if (buscarMaterialPorCodigo(materiais, codigo) != -1) {
+    vector<Material> v = carregarMateriais();
+    tela("ALMOXARIFADO CADASTRAR MATERIAL");
+    string cod = ler("Codigo do material (0 = voltar): ", semPontoEVirgula, ERRO_PV);
+    if (cod == "0") return;
+    if (buscarMaterialPorCodigo(v, cod) >= 0) {
         cout << "Material ja cadastrado.\n";
         pausar();
         return;
@@ -604,74 +355,21 @@ void cadastrarMaterial() {
         cout << "Descricao (maquina: modelo e S/N): ";
         getline(cin, desc);
         if (desc.empty()) cout << "A descricao e obrigatoria.\n";
-        else if (contemPontoEVirgula(desc)) cout << "A descricao nao pode conter ponto e virgula.\n";
+        else if (!semPontoEVirgula(desc)) cout << "A descricao nao pode conter ponto e virgula.\n";
         else break;
     }
 
-    string uni;
-    while (true) {
-        cout << "Unidade (UN ou M): ";
-        cin >> uni;
-        transform(uni.begin(), uni.end(), uni.begin(), ::toupper);
-        if (uni != "UN" && uni != "M") {
-            cout << "Unidade invalida. Digite UN ou M.\n";
-        } else {
-            break;
-        }
-    }
+    string uni = caixa(ler("Unidade (UN ou M): ", unidadeOk, "Unidade invalida. Digite UN ou M."), ::toupper);
+    double qtd = lerNumero("Quantidade inicial em estoque (pode ser 0): ", "Saldo negativo.", true);
+    string dh = (qtd > 0) ? lerDataHora() : "";
 
-    double qtdInicial = 0;
-    while (true) {
-        cout << "Quantidade inicial em estoque (pode ser 0): ";
-        if (!(cin >> qtdInicial) || qtdInicial < 0) {
-            cin.clear();
-            cin.ignore(10000, '\n');
-            cout << "Saldo negativo.\n";
-        } else {
-            break;
-        }
-    }
+    cout << "\nRESUMO DO CADASTRO\nCodigo: " << cod << "\nDescricao: " << desc
+         << "\nUnidade: " << uni << "\nSaldo inicial: " << qtd << "\n";
 
-    string data = "", hora = "";
-    if (qtdInicial > 0) {
-        while (true) {
-            cout << "Data (DD/MM/AAAA): ";
-            cin >> data;
-            if (!validarData(data)) cout << "Data invalida. Use DD/MM/AAAA\n";
-            else break;
-        }
-
-        while (true) {
-            cout << "Hora (HH:MM): ";
-            cin >> hora;
-            if (!validarHora(hora)) cout << "Hora invalida. Use HH:MM.\n";
-            else break;
-        }
-    }
-
-    // Resumo
-    cout << "\nRESUMO DO CADASTRO\n";
-    cout << "Codigo: " << codigo << "\n";
-    cout << "Descricao: " << desc << "\n";
-    cout << "Unidade: " << uni << "\n";
-    cout << "Saldo inicial: " << qtdInicial << "\n";
-
-    char conf;
-    cout << "Confirmar cadastro? (S/N): ";
-    cin >> conf;
-
-    if (toupper(conf) == 'S') {
-        Material novoMat = {codigo, desc, uni, qtdInicial};
-        materiais.push_back(novoMat);
-        salvarMateriais(materiais);
-
-        if (qtdInicial > 0) {
-            stringstream ss;
-            ss << data << " " << hora << ";ENTRADA;" << codigo << ";" 
-               << qtdInicial << ";0;" << qtdInicial << ";Saldo inicial";
-            registrarMovimentacao(ss.str());
-        }
-
+    if (confirmar("Confirmar cadastro?")) {
+        v.push_back({cod, desc, uni, qtd});
+        salvarMateriais(v);
+        if (qtd > 0) registrarMovimentacao(dh, "ENTRADA", cod, qtd, 0, qtd, "Saldo inicial");
         cout << "\nMaterial cadastrado com sucesso.\n";
     } else {
         cout << "Cadastro cancelado.\n";
@@ -679,197 +377,119 @@ void cadastrarMaterial() {
     pausar();
 }
 
-// ==========================================
-// MÓDULO 2: ACOMPANHAMENTO DE OBRAS
-// ==========================================
-
-void menuAcompanhamentoObras() {
-    int opcao = -1;
-    while (opcao != 0) {
-        cout << "\n------------------------------------------\n";
-        cout << " AIR SOLUTION ACOMPANHAMENTO DE OBRAS     \n";
-        cout << "------------------------------------------\n";
-        cout << "1 - Materiais enviados por obra\n";
-        cout << "0 - Voltar ao menu principal\n";
-        cout << "Escolha uma opcao: ";
-
-        if (!(cin >> opcao)) {
-            cin.clear();
-            cin.ignore(10000, '\n');
-            cout << "Opcao invalida. Digite um numero do menu.\n";
-            continue;
-        }
-
-        switch (opcao) {
-            case 1: materiaisEnviadosPorObra(); break; // RF03 consulta
-            case 0: break;
-            default: cout << "Opcao invalida. Digite um numero do menu.\n"; break;
-        }
-    }
+void menuAlmoxarifado() {
+    menu("AIR SOLUTION ALMOXARIFADO", '-',
+         {{"Registrar entrada", registrarEntrada}, {"Registrar saida para obra", registrarSaidaObra},
+          {"Ajuste de estoque", ajusteEstoque}, {"Cadastrar material", cadastrarMaterial}},
+         "Voltar ao menu principal");
 }
 
-// 2.1 Materiais enviados por Obra
+// ==========================================
+// MODULO 2: ACOMPANHAMENTO DE OBRAS
+// ==========================================
+
 void materiaisEnviadosPorObra() {
-    cout << "\n--- AIR SOLUTION OBRAS MATERIAIS ENVIADOS POR OBRA ---\n";
-    string obra = lerEntradaSemSemicolon("Codigo da obra ou manutencao (0 = voltar): ");
+    tela("OBRAS MATERIAIS ENVIADOS POR OBRA");
+    string obra = ler("Codigo da obra ou manutencao (0 = voltar): ", semPontoEVirgula, ERRO_PV);
     if (obra == "0") return;
 
-    vector<Material> materiais = carregarMateriais();
-    ifstream arqMov("movimentacoes.csv");
-
-    if (!arqMov.is_open()) {
+    ifstream f("movimentacoes.csv");
+    if (!f) {
         cout << "Nenhuma movimentacao encontrada.\n";
         pausar();
         return;
     }
 
+    vector<Material> v = carregarMateriais();
+    cout << "\n" << left << setw(12) << "DATA" << setw(8) << "HORA" << setw(8) << "COD" << setw(30) << "DESCRICAO"
+         << setw(8) << "QTD" << "UN\n" << string(67, '-') << "\n";
+
     string linha;
     int encontradas = 0;
-    cout << "\n" << left << setw(12) << "DATA" << setw(8) << "HORA" << setw(8) << "COD" 
-         << setw(30) << "DESCRICAO" << setw(8) << "QTD" << "UN\n";
-    cout << "-------------------------------------------------------------------\n";
-
-    while (getline(arqMov, linha)) {
-        if (linha.empty()) continue;
+    while (getline(f, linha)) {
         stringstream ss(linha);
-        string dataHora, tipo, cod, qtdStr, salAnt, salNovo, infoObra;
+        string dh, tipo, cod, qtd, anterior, novo, info;
+        for (string* campo : {&dh, &tipo, &cod, &qtd, &anterior, &novo, &info}) getline(ss, *campo, ';');
+        if (tipo != "SAIDA" || info != obra) continue;
 
-        getline(ss, dataHora, ';');
-        getline(ss, tipo, ';');
-        getline(ss, cod, ';');
-        getline(ss, qtdStr, ';');
-        getline(ss, salAnt, ';');
-        getline(ss, salNovo, ';');
-        getline(ss, infoObra, ';');
-
-        // Filtra por tipo SAIDA e pelo código da obra
-        if (tipo == "SAIDA" && infoObra == obra) {
-            encontradas++;
-            string data = dataHora.substr(0, 10);
-            string hora = (dataHora.length() >= 16) ? dataHora.substr(11, 5) : "";
-
-            int idx = buscarMaterialPorCodigo(materiais, cod);
-            string desc = (idx != -1) ? materiais[idx].descricao : "N/A";
-            string uni = (idx != -1) ? materiais[idx].unidade : "N/A";
-
-            cout << left << setw(12) << data << setw(8) << hora << setw(8) << cod 
-                 << setw(30) << desc << setw(8) << qtdStr << uni << "\n";
-        }
+        int i = buscarMaterialPorCodigo(v, cod);
+        cout << left << setw(12) << dh.substr(0, 10) << setw(8) << (dh.size() >= 16 ? dh.substr(11, 5) : "")
+             << setw(8) << cod << setw(30) << (i >= 0 ? v[i].descricao : "N/A") << setw(8) << qtd
+             << (i >= 0 ? v[i].unidade : "N/A") << "\n";
+        ++encontradas;
     }
-    arqMov.close();
 
-    if (encontradas == 0) {
-        cout << "Nenhuma saida encontrada para a " << obra << ".\n";
-    } else {
-        cout << "\n" << encontradas << " saida(s) encontrada(s).\n";
-    }
+    if (encontradas == 0) cout << "Nenhuma saida encontrada para a " << obra << ".\n";
+    else cout << "\n" << encontradas << " saida(s) encontrada(s).\n";
     pausar();
 }
 
-// ==========================================
-// MÓDULO 3: GESTÃO DO ESTOQUE
-// ==========================================
-
-void menuGestaoEstoque() {
-    int opcao = -1;
-    while (opcao != 0) {
-        cout << "\n------------------------------------------\n";
-        cout << "       AIR SOLUTION GESTAO DO ESTOQUE     \n";
-        cout << "------------------------------------------\n";
-        cout << "1 - Saldo de todos os materiais\n";
-        cout << "2 - Pesquisar material por codigo ou descricao\n";
-        cout << "0 - Voltar ao menu principal\n";
-        cout << "Escolha uma opcao: ";
-
-        if (!(cin >> opcao)) {
-            cin.clear();
-            cin.ignore(10000, '\n');
-            cout << "Opcao invalida. Digite um numero do menu.\n";
-            continue;
-        }
-
-        switch (opcao) {
-            case 1: saldoTodosMateriais(); break; // RF04
-            case 2: pesquisarMaterial(); break; // RF04
-            case 0: break;
-            default: cout << "Opcao invalida. Digite um numero do menu.\n"; break;
-        }
-    }
+void menuAcompanhamentoObras() {
+    menu("AIR SOLUTION ACOMPANHAMENTO DE OBRAS", '-',
+         {{"Materiais enviados por obra", materiaisEnviadosPorObra}}, "Voltar ao menu principal");
 }
 
-// 3.1 Saldo de Todos os Materiais
-void saldoTodosMateriais() {
-    vector<Material> materiais = carregarMateriais();
-    cout << "\n==========================================\n";
-    cout << "AIR SOLUTION GESTAO DO ESTOQUE > SALDO DE MATERIAIS\n";
-    cout << "==========================================\n";
+// ==========================================
+// MODULO 3: GESTAO DO ESTOQUE
+// ==========================================
 
-    if (materiais.empty()) {
+void saldoTodosMateriais() {
+    vector<Material> v = carregarMateriais();
+    tela("GESTAO DO ESTOQUE > SALDO DE MATERIAIS");
+    if (v.empty()) {
         cout << "Nenhum material cadastrado.\n";
     } else {
-        cout << left << setw(10) << "CODIGO" << setw(32) << "DESCRICAO" << setw(6) << "UN" << "SALDO\n";
-        cout << "---------------------------------------------------------\n";
-        for (const auto& m : materiais) {
-            cout << left << setw(10) << m.codigo << setw(32) << m.descricao << setw(6) << m.unidade << m.saldo << "\n";
-        }
-        cout << "\n" << materiais.size() << " material(is) cadastrado(s).\n";
+        tabelaMateriais(v);
+        cout << "\n" << v.size() << " material(is) cadastrado(s).\n";
     }
     pausar();
 }
 
-// 3.2 Pesquisar Material
-void pesquisarMaterial() {
-    int tipoBusca = -1;
-    while (tipoBusca != 0) {
-        cout << "\n------------------------------------------\n";
-        cout << "AIR SOLUTION GESTAO DO ESTOQUE > PESQUISAR MATERIAL\n";
-        cout << "------------------------------------------\n";
-        cout << "Pesquisar por:\n1 - Codigo\n2 - Descricao\n0 - Voltar\nEscolha: ";
+// Por codigo: busca exata | Por descricao: busca parcial, sem diferenciar maiusculas
+void pesquisar(bool porCodigo) {
+    tela("GESTAO DO ESTOQUE > PESQUISAR MATERIAL");
+    string termo;
+    cout << "Termo de busca (codigo ou parte da descricao): ";
+    cin.ignore(10000, '\n');
+    getline(cin, termo);
 
-        if (!(cin >> tipoBusca)) {
-            cin.clear();
-            cin.ignore(10000, '\n');
-            cout << "Opcao invalida.\n";
-            continue;
-        }
+    string t = caixa(termo, ::tolower);
+    vector<Material> achados;
+    for (const auto& m : carregarMateriais())
+        if (porCodigo ? m.codigo == termo : caixa(m.descricao, ::tolower).find(t) != string::npos)
+            achados.push_back(m);
 
-        if (tipoBusca == 0) break;
-        if (tipoBusca != 1 && tipoBusca != 2) {
-            cout << "Opcao invalida.\n";
-            continue;
-        }
+    cout << "\n";
+    tabelaMateriais(achados);
+    if (achados.empty()) cout << "Nenhum material encontrado.\n";
+    else cout << "\n" << achados.size() << " material(is) encontrado(s).\n";
+    pausar(false);
+}
 
-        cin.ignore(10000, '\n');
-        string termo;
-        cout << "Termo de busca (codigo ou parte da descricao): ";
-        getline(cin, termo);
+void pesquisarPorCodigo() { pesquisar(true); }
+void pesquisarPorDescricao() { pesquisar(false); }
 
-        vector<Material> materiais = carregarMateriais();
-        int encontradas = 0;
+void menuPesquisa() {
+    menu("AIR SOLUTION GESTAO DO ESTOQUE > PESQUISAR MATERIAL", '-',
+         {{"Pesquisar por codigo", pesquisarPorCodigo}, {"Pesquisar por descricao", pesquisarPorDescricao}}, "Voltar");
+}
 
-        cout << "\n" << left << setw(10) << "CODIGO" << setw(32) << "DESCRICAO" << setw(6) << "UN" << "SALDO\n";
-        cout << "---------------------------------------------------------\n";
+void menuGestaoEstoque() {
+    menu("AIR SOLUTION GESTAO DO ESTOQUE", '-',
+         {{"Saldo de todos os materiais", saldoTodosMateriais},
+          {"Pesquisar material por codigo ou descricao", menuPesquisa}},
+         "Voltar ao menu principal");
+}
 
-        string termoMin = paraMinusculo(termo);
+// ==========================================
+// MAIN
+// ==========================================
 
-        for (const auto& m : materiais) {
-            bool bateu = false;
-            if (tipoBusca == 1 && m.codigo == termo) {
-                bateu = true; // Exata por Código
-            } else if (tipoBusca == 2 && paraMinusculo(m.descricao).find(termoMin) != string::npos) {
-                bateu = true; // Parcial insensível a maiúsculas por Descrição
-            }
-
-            if (bateu) {
-                encontradas++;
-                cout << left << setw(10) << m.codigo << setw(32) << m.descricao << setw(6) << m.unidade << m.saldo << "\n";
-            }
-        }
-
-        if (encontradas == 0) {
-            cout << "Nenhum material encontrado.\n";
-        } else {
-            cout << "\n" << encontradas << " material(is) encontrado(s).\n";
-        }
-    }
+int main() {
+    menu("AIR SOLUTION MENU PRINCIPAL", '=',
+         {{"Almoxarifado", menuAlmoxarifado}, {"Acompanhamento de obras", menuAcompanhamentoObras},
+          {"Gestao do estoque", menuGestaoEstoque}},
+         "Sair");
+    cout << "\nAir Solution - Menu principal\nSistema encerrado. Ate logo!\n";
+    return 0;
 }
